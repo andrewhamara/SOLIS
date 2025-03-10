@@ -1,3 +1,5 @@
+# tokenizer as implemented in https://github.com/google-deepmind/searchless_chess
+
 import jaxtyping as jtp
 import numpy as np
 
