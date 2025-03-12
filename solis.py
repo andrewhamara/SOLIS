@@ -7,8 +7,11 @@ class SOLIS(nn.Module):
     def __init__(self, embed_dim=512, num_heads=8, ff_dim=2048, num_layers=6):
         super().__init__()
 
-        self.embedding = nn.Linear(77, embed_dim)
-        self.positional_encoding = nn.Parameter(torch.zeros(1, 77, embed_dim))
+        self.embed_dim = embed_dim
+        self.seq_len = 77
+
+        self.embedding = nn.Embedding(self.seq_len, embed_dim)
+        self.positional_encoding = nn.Parameter(torch.randn(1, self.seq_len + 1, embed_dim))
 
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=embed_dim,
@@ -23,15 +26,22 @@ class SOLIS(nn.Module):
         self.projection = nn.Linear(embed_dim, embed_dim)
 
     def forward(self, x):
-        x = x.float()
+        x = x.long()
 
-        # embedding + positional encoding
+        batch_size, seq_len = x.shape
+
         x = self.embedding(x)
-        x = x + self.positional_encoding
+
+        e = self.positional_encoding[:, : x.shape[1]]
+
+        x = x + e 
 
         # forward pass
-        x = self.transformer(x.unsqueeze(1))
+        x = self.transformer(x)
+
+        # pooling
+        x = x[:, 0]
 
         # projection into embedding space followed by norm
-        x = self.projection(x.squeeze(1))
+        x = self.projection(x)
         return F.normalize(x, p=2, dim=-1)

@@ -36,7 +36,8 @@ class MateInKDataset(Dataset):
         pos_fen = self.fens[pos_i].decode('utf-8')
         pos_fen = tokenize(pos_fen)
 
-        neg_indices = np.where(self.ks != anchor_k)[0]
+        neg_mask = np.abs(self.ks - anchor_k) >= 2
+        neg_indices = np.where(neg_mask)[0]
         num_neg_samples = min(self.num_negatives, len(neg_indices))
         neg_i = np.random.choice(neg_indices, num_neg_samples, replace=False)
 
