@@ -12,6 +12,7 @@ class SOLIS(nn.Module):
 
         self.embedding = nn.Embedding(self.seq_len, embed_dim)
         self.positional_encoding = nn.Parameter(torch.randn(1, self.seq_len + 1, embed_dim))
+        self.cls_token = nn.Parameter(torch.randn(1, 1, embed_dim))
 
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=embed_dim,
@@ -30,7 +31,10 @@ class SOLIS(nn.Module):
 
         batch_size, seq_len = x.shape
 
+        cls_tokens = self.cls_token.expand(batch_size, -1, -1)
+
         x = self.embedding(x)
+        x = torch.cat([cls_tokens, x], dim=1)
 
         e = self.positional_encoding[:, : x.shape[1]]
 
