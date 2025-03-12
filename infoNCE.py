@@ -17,6 +17,10 @@ class InfoNCELoss(torch.nn.Module):
         sim_pos /= self.temperature
         sim_neg /= self.temperature
 
-        loss = -torch.log(torch.exp(sim_pos) / (torch.exp(sim_pos) + torch.sum(torch.exp(sim_neg), dim=-1)))
+        logits = torch.cat([sim_pos.unsqueeze(-1), sim_neg], dim=-1)
+
+        log_softmax = F.log_softmax(logits, dim=-1)
+
+        loss = -log_softmax[:, 0]
 
         return loss.mean()
