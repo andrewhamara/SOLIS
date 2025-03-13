@@ -6,11 +6,13 @@ from tokenizer import tokenize
 from torch.utils.data import Dataset, DataLoader
 
 
-DATA_PATH = '/data/hamaraa/mate_in_k_test.h5'
+TRAIN_DATA_PATH = '/data/hamaraa/mate_in_k_train.h5'
+VAL_DATA_PATH = '/data/hamaraa/mate_in_k_val.h5'
 
 class MateInKDataset(Dataset):
-    def __init__(self, file_path, num_negatives):
+    def __init__(self, file_path, num_negatives, num_positives):
         self.num_negatives = num_negatives
+        self.num_positives = num_positives
         self.file_path = file_path
 
         with h5py.File(file_path, 'r') as f:
@@ -31,12 +33,20 @@ class MateInKDataset(Dataset):
         anchor_fen = tokenize(anchor_fen)
         anchor_k = self.ks[idx]
 
+        # same k as anchor
+        #print('getting positives')
         pos_indices = self.k_to_indices[anchor_k]
-        pos_i = random.choice(pos_indices) if len(pos_indices) > 1 else idx
-        pos_fen = self.fens[pos_i].decode('utf-8')
-        pos_fen = tokenize(pos_fen)
+        num_pos_samples = min(self.num_positives, len(pos_indices))
+        pos_i = np.random.choice(pos_indices, num_pos_samples, replace=False)
 
-        neg_mask = np.abs(self.ks - anchor_k) >= 2
+        pos_fens = torch.stack([
+            torch.tensor(tokenize(self.fens[i].decode('utf-8')), dtype=torch.int32)
+            for i in pos_i
+        ])
+
+        # all other k
+        #print('getting negatives')
+        neg_mask = np.abs(self.ks - anchor_k) >= 1
         neg_indices = np.where(neg_mask)[0]
         num_neg_samples = min(self.num_negatives, len(neg_indices))
         neg_i = np.random.choice(neg_indices, num_neg_samples, replace=False)
@@ -46,17 +56,22 @@ class MateInKDataset(Dataset):
             for i in neg_i
         ])
 
-        return anchor_fen, pos_fen, neg_fens
+        return anchor_fen, pos_fens, neg_fens
 
 
     def close(self):
         self.f.close()
 
 
-def get_dataloader(batch_size=512, shuffle=True, num_workers=4):
-    dataset = MateInKDataset(DATA_PATH, 20)
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers, pin_memory=True)
-    return dataloader
+def get_dataloader(batch_size=512, shuffle=True, num_workers=32, split='train'):
+    if split == 'train':
+        dataset = MateInKDataset(TRAIN_DATA_PATH, num_negatives=32, num_positives=8)
+        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers, pin_memory=True)
+        return dataloader
+    elif split == 'val':
+        dataset = MateInKDataset(VAL_DATA_PATH, num_negatives=32, num_positives=8)
+        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers, pin_memory=True)
+        return dataloader
 
 
 if __name__ == '__main__':

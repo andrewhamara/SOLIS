@@ -28,22 +28,20 @@ class SOLIS(nn.Module):
 
     def forward(self, x):
         x = x.long()
-
         batch_size, seq_len = x.shape
 
-        cls_tokens = self.cls_token.expand(batch_size, -1, -1)
-
         x = self.embedding(x)
+
+        cls_tokens = self.cls_token.repeat(batch_size, 1, 1)
         x = torch.cat([cls_tokens, x], dim=1)
 
-        e = self.positional_encoding[:, : x.shape[1]]
-
+        e = self.positional_encoding[:, : x.shape[1], :]
         x = x + e 
 
         # forward pass
         x = self.transformer(x)
 
-        # pooling
+        # extract CLS token
         x = x[:, 0]
 
         # projection into embedding space followed by norm

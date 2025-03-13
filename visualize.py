@@ -8,7 +8,7 @@ from solis import SOLIS  # Import the trained model
 from tokenizer import tokenize  # Your custom tokenizer
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-MODEL_PATH = "/data/hamaraa/solis_epoch_800.pth"  # Adjust this to your trained model checkpoint
+MODEL_PATH = "/data/hamaraa/solis_epoch_300.pth"  # Adjust this to your trained model checkpoint
 model = SOLIS().to(DEVICE)
 model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
 model.eval()
