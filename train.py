@@ -1,14 +1,13 @@
 import torch
 import torch.optim as optim
 from tqdm import tqdm
+from transformers import get_linear_schedule_with_warmup
 
 from mate_in_k_dataloader import get_dataloader
 from infoNCE import InfoNCELoss
 from solis import SOLIS
 
 gpus = [0,1,2,3]
-
-print(torch.cuda.device_count())
 
 print('setting up model...')
 model = SOLIS().cuda()
@@ -19,76 +18,74 @@ print(sum(p.numel() for p in model.parameters()))
 
 print('setting up training items...')
 loss_fn = InfoNCELoss(temperature=0.07).cuda()
-optimizer = optim.AdamW(model.parameters(), lr=3e-4, weight_decay=1e-5)
-scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=10)
+optimizer = optim.AdamW(model.parameters(), lr=3e-4, weight_decay=0.1e-5)
 
 print('loading data...')
-train_dataloader = get_dataloader(batch_size=16, split='train')
-val_dataloader = get_dataloader(batch_size=16, split='val')
+train_dataloader = get_dataloader(batch_size=32, split='train')
 
-MAX_STEPS = 1_000_000
-VAL_INTERVAL = 5_000
-SAVE_INTERVAL = 10_000
+scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=10)
 
-step = 0
+first_1000_samples = []
+target_size = 10_000
 
-progress_bar = tqdm(total=MAX_STEPS, desc='training progress', dynamic_ncols=True)
+## Iterate through the dataloader
+#for batch in train_dataloader:
+#    anchor_token, positive_token, negative_tokens = batch
+#
+#    batch_size = anchor_token.shape[0]
+#    
+#    for i in range(batch_size):
+#        if len(first_1000_samples) >= target_size:
+#            break
+#        first_1000_samples.append([anchor_token, positive_token, negative_tokens])
+#    
+#    if len(first_1000_samples) >= target_size:
+#        break
 
-while step < MAX_STEPS:
+
+EPOCHS = 10
+SAVE_INTERVAL = 1
+
+for epoch in range(EPOCHS):
     model.train()
-    train_loss = 0
+    total_loss = 0
 
-    #progress_bar = tqdm(train_dataloader, desc=f'Step {step}/{MAX_STEPS}')
-    for anchor_fen, positive_fens, negative_fens in train_dataloader:
-        if step >= MAX_STEPS:
-            break
-        anchor = model(anchor_fen.cuda())
+    progress_bar = tqdm(train_dataloader, desc=f'Epoch {epoch+1}/{EPOCHS}')
 
-        positive_fens = positive_fens.cuda()
-        positives = model(positive_fens.view(-1, positive_fens.size(-1)))
-        positives = positives.view(positive_fens.size(0), positive_fens.size(1), -1)
+    for batch in progress_bar:
 
-        negative_fens = negative_fens.cuda()
-        negatives = model(negative_fens.view(-1, negative_fens.size(-1)))
-        negatives = negatives.view(negative_fens.size(0), negative_fens.size(1), -1)
+        # unpack batch and move to gpu
+        anchor_token, positive_token, negative_tokens = batch
+        anchor_token, positive_token, negative_tokens = anchor_token.cuda(), positive_token.cuda(), negative_tokens.cuda()
 
-        loss = loss_fn(anchor, positives, negatives)
-        train_loss += loss.item()
+        # anchor forward
+        anchor = model(anchor_token)
+
+        # positive forward
+        positive = model(positive_token)
+
+        # negatives forward
+        negatives = model(negative_tokens.view(-1, negative_tokens.size(-1)))
+        negatives = negatives.view(negative_tokens.size(0), negative_tokens.size(1), -1)
+
+        # loss
+        loss = loss_fn(anchor, positive, negatives)
+        total_loss += loss.item()
 
         optimizer.zero_grad()
         loss.backward()
+
+        # clip gradients
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.25)
+
         optimizer.step()
 
-        progress_bar.update(1)
-        progress_bar.set_postfix(loss=loss.item(), step=step)
-
-        if step % VAL_INTERVAL == 0 and step > 0:
-            model.eval()
-            val_loss = 0.0
-            with torch.no_grad():
-                for val_anchor_fen, val_positive_fens, val_negative_fens in val_dataloader:
-                    val_anchor = model(anchor_fen.cuda())
-
-                    val_positive_fens = val_positive_fens.cuda()
-                    val_positives = model(val_positive_fens.view(-1, val_positive_fens.size(-1)))
-                    val_positives = val_positives.view(val_positive_fens.size(0), val_positive_fens.size(1), -1)
-
-                    val_negative_fens = val_negative_fens.cuda()
-                    val_negatives = model(val_negative_fens.view(-1, val_negative_fens.size(-1)))
-                    val_negatives = negatives.view(val_negative_fens.size(0), val_negative_fens.size(1), -1)
-
-                    v_loss = loss_fn(val_anchor, val_positives, val_negatives)
-                    val_loss += v_loss.item()
-
-            avg_val_loss = val_loss / len(val_loader)
-            print(f'validation loss at step {step}: {avg_val_loss:.4f}')
-            model.train()
-
-              
-        if step % SAVE_INTERVAL == 0 and step > 0:
-            torch.save(model.module.state_dict(), f'/data/hamaraa/solis_step_{step}.pth')
-        step += 1
+        progress_bar.set_postfix(loss=loss.item())
     scheduler.step()
+    print(f'Epoch {epoch+1} | avg loss: {total_loss / len(train_dataloader):.4f}')
+
+    if epoch % SAVE_INTERVAL == 0 and epoch > 0:
+        torch.save(model.module.state_dict(), f'/data/hamaraa/solis_epoch_{epoch}.pth')
 
 print('training complete!')
 torch.save(model.module.state_dict(), '/data/hamaraa/solis_final.pth')

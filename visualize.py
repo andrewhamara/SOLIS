@@ -8,13 +8,14 @@ from solis import SOLIS  # Import the trained model
 from tokenizer import tokenize  # Your custom tokenizer
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-MODEL_PATH = "/data/hamaraa/solis_epoch_300.pth"  # Adjust this to your trained model checkpoint
-model = SOLIS().to(DEVICE)
+print(DEVICE)
+MODEL_PATH = "/data/hamaraa/solis_final.pth"  # Adjust this to your trained model checkpoint
+model = SOLIS(embed_dim=64, ff_dim=512, num_heads=8, num_layers=6).to(DEVICE)
 model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
 model.eval()
 
 print('loading dataset...')
-DATA_PATH = "/data/hamaraa/mate_in_k_test.h5"
+DATA_PATH = "/data/hamaraa/mate_in_k_train_500k.h5"
 with h5py.File(DATA_PATH, "r") as f:
     fens = np.array(f["fens"])
     ks = np.array(f["k"])
@@ -25,11 +26,14 @@ mate_black_indices = ks == -444
 normal_indices = (ks != 444) & (ks != -444)
 
 print('doing forward passes...')
-def inference(fens):
+def inference(fens_batch, batch_size=256):
     with torch.no_grad():
-        fen_tokens = torch.tensor([tokenize(fen.decode('utf-8')) for fen in fens]).to(DEVICE)
-        embeddings = model(fen_tokens).cpu().numpy()
-        return embeddings
+        all_embeddings = []
+        for i in range(0, len(fens_batch), batch_size):
+            batch = torch.tensor(fens_batch[i:i+batch_size], dtype=torch.long, device=DEVICE)
+            batch_embeddings = model(batch).cpu().numpy()
+            all_embeddings.append(batch_embeddings)
+        return np.concatenate(all_embeddings, axis=0)
 
 normal_fens = fens[normal_indices]
 normal_ks = ks[normal_indices]
@@ -58,11 +62,10 @@ k_to_color = {k: color_palette[i] for i, k in enumerate(unique_ks)}
 # Map k values to colors
 point_colors = [k_to_color[k] for k in normal_ks]
 
-# Plot UMAP embeddings
 plt.figure(figsize=(12, 8))
 
 # Plot normal positions (dots)
-plt.scatter(
+scatter = plt.scatter(
     normal_embeddings_2d[:, 0],
     normal_embeddings_2d[:, 1],
     c=point_colors,
@@ -93,12 +96,16 @@ plt.scatter(
     label="Black Checkmate (k=-444)"
 )
 
-# Add legend for k values
+# Add dummy scatter points for each k value
 for k, color in k_to_color.items():
     plt.scatter([], [], c=[color], label=f'k={k}')
 
-plt.legend(markerscale=3, title="Mate in k")
+# Create a proper legend
+plt.legend(fontsize=8, loc='upper left', bbox_to_anchor=(1.05, 1), 
+           borderaxespad=0., markerscale=3, title="Mate in k")
+
+# Ensure that the legend fits within the figure
+plt.subplots_adjust(right=0.75)  # Adjust right margin to fit legend
+
 plt.title("UMAP Projection of Chess Positions (Colored by k, Checkmates as Stars)")
-plt.xlabel("UMAP Dimension 1")
-plt.ylabel("UMAP Dimension 2")
 plt.savefig('embeddings.pdf')

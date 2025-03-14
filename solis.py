@@ -4,7 +4,7 @@ import torch.nn.functional as F
 
 
 class SOLIS(nn.Module):
-    def __init__(self, embed_dim=512, num_heads=8, ff_dim=2048, num_layers=6):
+    def __init__(self, embed_dim=64, num_heads=8, ff_dim=512, num_layers=12):
         super().__init__()
 
         self.embed_dim = embed_dim
