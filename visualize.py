@@ -9,16 +9,20 @@ from tokenizer import tokenize  # Your custom tokenizer
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(DEVICE)
-MODEL_PATH = "/data/hamaraa/solis_final.pth"  # Adjust this to your trained model checkpoint
-model = SOLIS(embed_dim=64, ff_dim=512, num_heads=8, num_layers=6).to(DEVICE)
+MODEL_PATH = "/data/hamaraa/solis_best.pth"  # Adjust this to your trained model checkpoint
+#model = SOLIS(embed_dim=64, ff_dim=512, num_heads=8, num_layers=6).to(DEVICE)
+model = SOLIS().to(DEVICE)
 model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
 model.eval()
 
 print('loading dataset...')
-DATA_PATH = "/data/hamaraa/mate_in_k_train_500k.h5"
+DATA_PATH = "/data/hamaraa/mate_in_k_train_100k.h5"
 with h5py.File(DATA_PATH, "r") as f:
     fens = np.array(f["fens"])
     ks = np.array(f["k"])
+
+print(len(fens))
+print(len(ks))
 
 print('extracting checkmates...')
 mate_white_indices = ks == 444

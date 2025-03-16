@@ -16,11 +16,15 @@ def clip_data():
         ks_filtered = ks[valid_i]
         fens_filtered = fens[valid_i]
 
+        unique_fens, unique_indices = np.unique(fens_filtered, return_index=True)
+        ks_unique = ks_filtered[unique_indices]
+
         del f['k'], f['fens']
         f.create_dataset('k', data=ks_filtered)
-        f.create_dataset('fens', data=fens_filtered)
+        f.create_dataset('fens', data=unique_fens)
 
-        print(f'removed {len(ks) - len(ks_filtered)} samples')
+        print(f'removed {len(ks) - len(ks_filtered)} samples from clipping')
+        print(f'removed {len(fens_filtered) - len(unique_fens)} duplicates after clipping')
 
 if __name__ == '__main__':
     clip_data()

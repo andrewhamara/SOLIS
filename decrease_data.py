@@ -3,8 +3,8 @@ import numpy as np
 import torch
 
 FULL_DATA_PATH = '/data/hamaraa/mate_in_k_train_tokenized.h5'
-SUBSET_DATA_PATH = '/data/hamaraa/mate_in_k_train_500k.h5'
-TARGET_SIZE = 500_000
+SUBSET_DATA_PATH = '/data/hamaraa/mate_in_k_train_10k.h5'
+TARGET_SIZE = 10_000
 
 print("Loading full dataset...")
 with h5py.File(FULL_DATA_PATH, 'r') as f:
