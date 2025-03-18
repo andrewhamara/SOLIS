@@ -23,16 +23,17 @@ print('loading data...')
 batch_size = 128
 train_dataloader = get_dataloader(batch_size=batch_size, split='train')
 
-EPOCHS = 200
+MAX_STEPS = 2_000_000
+#EPOCHS = 200
 
 best_loss = float('inf')
+steps = 0
 
-for epoch in range(EPOCHS):
+while steps < MAX_STEPS:
     model.train()
     total_loss = 0
 
-    progress_bar = tqdm(train_dataloader, desc=f'Epoch {epoch+1}/{EPOCHS}')
-
+    progress_bar = tqdm(train_dataloader, desc=f'Step {steps+1}/{MAX_STEPS}', dynamic_ncols=True)
     for batch in progress_bar:
 
         # unpack batch
@@ -42,38 +43,43 @@ for epoch in range(EPOCHS):
         # move to gpu
         anchor_tokens = anchor_tokens.cuda()
         positive_tokens = positive_tokens.cuda()
-        labels.cuda()
+        labels = labels.cuda()
 
         # extract batch size
         b = labels.shape[0]
 
+        # anchor embeddings
+        ae = model(anchor_tokens)
 
-        all_tokens = torch.cat([anchor_tokens, positive_tokens], dim=0)
+        # positive embeddings
+        pe = model(positive_tokens.view(-1, 77))
+        pe = pe.view(b, 7, -1)
 
-        # anchor forward
-        embeddings = model(all_tokens)
-        e1, e2 = torch.split(embeddings, [b, b], dim=0)
-        embeddings = torch.cat([e1.unsqueeze(1), e2.unsqueeze(1)], dim=1)
+        # combine
+        embeddings = torch.cat([ae.unsqueeze(1), pe], dim=1)
 
         # loss
         loss = loss_fn(embeddings, labels)
         total_loss += loss.item()
 
+        # update
         optimizer.zero_grad()
         loss.backward()
-
-        # clip gradients
-        #torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-
         optimizer.step()
+        steps += 1
 
         progress_bar.set_postfix(loss=loss.item())
-    #scheduler.step()
-    print(f'Epoch {epoch+1} | avg loss: {total_loss / len(train_dataloader):.4f}')
 
-    if loss < best_loss:
-        torch.save(model.module.state_dict(), f'/data/hamaraa/solis_best.pth')
+        if steps % 20000 == 0:
+            avg_loss = total_loss / len(train_dataloader)
+            print(f'avg loss: {avg_loss}')
+            # save if best
+            if avg_loss < best_loss:
+                best_loss = avg_loss
+                torch.save(model.module.state_dict(), f'/data/hamaraa/solis_best.pth')
+
+            # reset total loss for next 20k steps
+            total_loss = 0
 
 print('training complete!')
 torch.save(model.module.state_dict(), '/data/hamaraa/solis_final.pth')
-progress_bar.close()

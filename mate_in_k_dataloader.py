@@ -6,8 +6,9 @@ from tokenizer import tokenize
 from torch.utils.data import Dataset, DataLoader
 
 
-TRAIN_DATA_PATH = '/data/hamaraa/mate_in_k_train_500k.h5'
+TRAIN_DATA_PATH = '/data/hamaraa/mate_in_k_train_1m.h5'
 VAL_DATA_PATH = '/data/hamaraa/mate_in_k_val.h5'
+NUM_POSITIVES = 7
 
 class MateInKDataset(Dataset):
     def __init__(self, file_path):
@@ -31,10 +32,15 @@ class MateInKDataset(Dataset):
         anchor_k = self.ks[idx]
         
         pos_indices = self.k_to_indices[anchor_k]
-        pos_i = random.choice(pos_indices)
-        positive_token_tensor = torch.tensor(self.fens[pos_i], dtype=torch.int32)
-       
-        return (anchor_token_tensor, positive_token_tensor), anchor_k
+        p = min(len(pos_indices), NUM_POSITIVES)
+        pos_i = np.random.choice(pos_indices, p, replace=False)
+
+        positive_token_tensors = torch.stack([
+            torch.tensor(self.fens[i], dtype=torch.int32)
+            for i in pos_i
+        ])
+
+        return (anchor_token_tensor, positive_token_tensors), anchor_k
 
     def close(self):
         self.f.close()
