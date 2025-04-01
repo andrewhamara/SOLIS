@@ -8,7 +8,7 @@ from torch.utils.data import Dataset, DataLoader
 
 TRAIN_DATA_PATH = '/data/hamaraa/mate_in_k_train_1m.h5'
 VAL_DATA_PATH = '/data/hamaraa/mate_in_k_val.h5'
-NUM_POSITIVES = 7
+NUM_POSITIVES = 5
 
 class MateInKDataset(Dataset):
     def __init__(self, file_path):

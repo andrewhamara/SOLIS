@@ -4,112 +4,122 @@ import numpy as np
 import umap
 import matplotlib.pyplot as plt
 import seaborn as sns
-from solis import SOLIS  # Import the trained model
-from tokenizer import tokenize  # Your custom tokenizer
+from tokenizer import tokenize
+from solis import SOLIS
+import chess
+import chess.pgn
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(DEVICE)
-MODEL_PATH = "/data/hamaraa/solis_best.pth"  # Adjust this to your trained model checkpoint
-#model = SOLIS(embed_dim=64, ff_dim=512, num_heads=8, num_layers=6).to(DEVICE)
-model = SOLIS().to(DEVICE)
+print("Using device:", DEVICE)
+
+# load model
+MODEL_PATH = "/data/hamaraa/solis_good.pth"
+#model = SOLIS().to(DEVICE)
+model = SOLIS(embed_dim=1024, ff_dim=1024).to(DEVICE)
 model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
 model.eval()
 
-print('loading dataset...')
-DATA_PATH = "/data/hamaraa/mate_in_k_train_100k.h5"
+# load data
+DATA_PATH = "/data/hamaraa/tokenized_1m.h5"  # or tokenized_1m.h5 if you dropped bins
+print("Loading data...")
 with h5py.File(DATA_PATH, "r") as f:
-    fens = np.array(f["fens"])
-    ks = np.array(f["k"])
+    tokens = np.array(f["fens"])
+    ps = np.array(f["ps"])
 
-print(len(fens))
-print(len(ks))
+# subsample data
+N = 10_000
+indices = np.random.choice(len(tokens), size=N, replace=False)
+tokens_subset = tokens[indices]
+ps_subset = ps[indices]
 
-print('extracting checkmates...')
-mate_white_indices = ks == 444
-mate_black_indices = ks == -444
-normal_indices = (ks != 444) & (ks != -444)
-
-print('doing forward passes...')
-def inference(fens_batch, batch_size=256):
+# encode samples
+def get_embeddings(x, batch_size=256):
+    all_embeddings = []
     with torch.no_grad():
-        all_embeddings = []
-        for i in range(0, len(fens_batch), batch_size):
-            batch = torch.tensor(fens_batch[i:i+batch_size], dtype=torch.long, device=DEVICE)
-            batch_embeddings = model(batch).cpu().numpy()
-            all_embeddings.append(batch_embeddings)
-        return np.concatenate(all_embeddings, axis=0)
+        for i in range(0, len(x), batch_size):
+            batch = torch.tensor(x[i:i+batch_size], dtype=torch.long, device=DEVICE)
+            emb = model(batch).cpu().numpy()
+            all_embeddings.append(emb)
+    return np.concatenate(all_embeddings, axis=0)
 
-normal_fens = fens[normal_indices]
-normal_ks = ks[normal_indices]
-normal_embeddings = inference(normal_fens)
+print("Running model inference...")
+embeddings = get_embeddings(tokens_subset)
 
-white_mate_fens = fens[mate_white_indices]
-white_mate_embeddings = inference(white_mate_fens)
+# UMAP
+print("Running UMAP...")
+reducer = umap.UMAP(n_components=2, random_state=42)
+embeddings_2d = reducer.fit_transform(embeddings)
 
-black_mate_fens = fens[mate_black_indices]
-black_mate_embeddings = inference(black_mate_fens)
-
-print(len(normal_fens))
-print(len(white_mate_fens))
-print(len(black_mate_fens))
-
-print('reducing dimensions...')
-umap_reducer = umap.UMAP(n_components=2, random_state=42)
-normal_embeddings_2d = umap_reducer.fit_transform(normal_embeddings)
-white_mate_embeddings_2d = umap_reducer.transform(white_mate_embeddings)
-black_mate_embeddings_2d = umap_reducer.transform(black_mate_embeddings)
-
-unique_ks = np.unique(normal_ks)
-color_palette = sns.color_palette("tab20", len(unique_ks))  # Use tab20 for categorical colors
-k_to_color = {k: color_palette[i] for i, k in enumerate(unique_ks)}
-
-# Map k values to colors
-point_colors = [k_to_color[k] for k in normal_ks]
-
-plt.figure(figsize=(12, 8))
-
-# Plot normal positions (dots)
+# plot
+plt.figure(figsize=(10, 8))
 scatter = plt.scatter(
-    normal_embeddings_2d[:, 0],
-    normal_embeddings_2d[:, 1],
-    c=point_colors,
-    alpha=0.7,
-    s=5,
-    label="Mate in k positions"
+    embeddings_2d[:, 0],
+    embeddings_2d[:, 1],
+    c=ps_subset,
+    cmap="coolwarm",  # blue = black win, red = white win
+    s=8,
+    alpha=0.8
 )
+cbar = plt.colorbar(scatter)
+cbar.set_label("Win Probability (for white)")
+plt.title("UMAP Projection of SOLIS Embeddings\nColored by Win Probability")
+plt.tight_layout()
+plt.savefig("solis_umap_winprob.pdf")
+plt.close()
 
-# Plot white checkmate positions (star markers)
-plt.scatter(
-    white_mate_embeddings_2d[:, 0],
-    white_mate_embeddings_2d[:, 1],
-    c="gold",
-    marker="*",  # Star marker
-    s=80,        # Bigger size to make it distinct
-    edgecolors="black",
-    label="White Checkmate (k=+444)"
-)
+# === optional: overlay game trajectory ===
+def encode_fens(fens):
+    model.eval()
+    with torch.no_grad():
+        toks = [tokenize(fen) for fen in fens]
+        toks = torch.tensor(toks, dtype=torch.long, device=DEVICE)
+        return model(toks).cpu().numpy()
 
-# Plot black checkmate positions (star markers)
-plt.scatter(
-    black_mate_embeddings_2d[:, 0],
-    black_mate_embeddings_2d[:, 1],
-    c="red",
-    marker="*",
-    s=80,
-    edgecolors="black",
-    label="Black Checkmate (k=-444)"
-)
+def plot_game_on_umap(base_points, traj_points_2d, save_path):
+    fig, ax = plt.subplots(figsize=(10, 8))
 
-# Add dummy scatter points for each k value
-for k, color in k_to_color.items():
-    plt.scatter([], [], c=[color], label=f'k={k}')
+    # background cloud
+    ax.scatter(base_points[:, 0], base_points[:, 1], s=1, alpha=0.05, color="gray", label="embedding space")
 
-# Create a proper legend
-plt.legend(fontsize=8, loc='upper left', bbox_to_anchor=(1.05, 1), 
-           borderaxespad=0., markerscale=3, title="Mate in k")
+    # nodes
+    ax.scatter(traj_points_2d[1:-1, 0], traj_points_2d[1:-1, 1], color="black", s=10)
+    ax.scatter(traj_points_2d[0, 0], traj_points_2d[0, 1], color="green", s=60, label="start")
+    ax.scatter(traj_points_2d[-1, 0], traj_points_2d[-1, 1], color="black", s=60, label="end")
 
-# Ensure that the legend fits within the figure
-plt.subplots_adjust(right=0.75)  # Adjust right margin to fit legend
+    # arrows for each move
+    for i in range(len(traj_points_2d) - 1):
+        x1, y1 = traj_points_2d[i]
+        x2, y2 = traj_points_2d[i + 1]
+        ax.annotate("",
+            xy=(x2, y2), xytext=(x1, y1),
+            arrowprops=dict(arrowstyle="->", color="black", lw=1),
+        )
 
-plt.title("UMAP Projection of Chess Positions (Colored by k, Checkmates as Stars)")
-plt.savefig('embeddings.pdf')
+    ax.set_title("Latent Interpolation of Game Trajectory")
+    ax.axis("off")
+    ax.legend()
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=300)
+    plt.close()
+
+
+# example 4 move checkmate
+def extract_fens_from_pgn(pgn_path):
+    with open(pgn_path) as f:
+        game = chess.pgn.read_game(f)
+    board = game.board()
+    fens = [board.fen()]
+    for move in game.mainline_moves():
+        board.push(move)
+        fens.append(board.fen())
+    return fens
+
+# === Inputs ===
+PGN_PATH = "game.pgn"
+game_fens = extract_fens_from_pgn(PGN_PATH)
+
+# === run trajectory visualization ===
+print("Embedding trajectory...")
+z_traj = encode_fens(game_fens)
+z_traj_2d = reducer.transform(z_traj)
+plot_game_on_umap(embeddings_2d, z_traj_2d, "solis_game_interpolation.pdf")
