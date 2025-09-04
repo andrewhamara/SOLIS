@@ -8,8 +8,8 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Using device:", DEVICE)
 
 # load model
-model = SOLIS().to(DEVICE)
-model.load_state_dict(torch.load("/data/hamaraa/solis_latest.pth", map_location=DEVICE))
+model = SOLIS(embed_dim=1024, ff_dim=1024).to(DEVICE)
+model.load_state_dict(torch.load("/data/hamaraa/solis_good.pth", map_location=DEVICE))
 model.eval()
 
 # load data
@@ -41,7 +41,7 @@ mean_white = white_embs.mean(axis=0)
 mean_black = black_embs.mean(axis=0)
 
 # save
-np.save("/data/hamaraa/mean_white_checkmate_large.npy", mean_white)
-np.save("/data/hamaraa/mean_black_checkmate_large.npy", mean_black)
+np.save("/data/hamaraa/mean_white_checkmate.npy", mean_white)
+np.save("/data/hamaraa/mean_black_checkmate.npy", mean_black)
 
 print('done')

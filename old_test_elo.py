@@ -28,6 +28,16 @@ small = False
 DEPTH = 2
 WIDTH = 3
 
+def get_embeddings(x, batch_size=256):
+    all_embeddings = []
+    with torch.no_grad():
+        for i in range(0, len(x), batch_size):
+            batch = torch.tensor(x[i:i+batch_size], dtype=torch.long, device=DEVICE)
+            emb = model(batch).cpu().numpy()
+            all_embeddings.append(emb)
+    return np.concatenate(all_embeddings, axis=0)
+
+
 if DEPTH == 2:
     STOCKFISH_ELOS = [2100, 2050, 2000, 1950, 1900, 1850, 1800]
 #if DEPTH == 3:
@@ -54,6 +64,15 @@ else:
 
 model.eval()
 
+def compute_projection_trajectory(fens, v_advantage):
+    embeddings = embed_fens(fens)
+    projections = []
+    for i in range(len(embeddings) - 1):
+        delta = embeddings[i + 1] - embeddings[i]
+        proj = np.dot(delta.cpu(), v_advantage.cpu().numpy())
+        projections.append(proj)
+    return projections
+
 # convert to tensor for rest of script
 v_white = torch.tensor(v_white, dtype=torch.float32).to(DEVICE)
 v_black = torch.tensor(v_black, dtype=torch.float32).to(DEVICE)
@@ -71,43 +90,8 @@ def embed_fens(fens):
     with torch.no_grad():
         return model(batch)  # shape [N, D]
 
-def spherical_arc_distance_batch(X, p, g, eps=1e-8):
-    """
-    minimal angular distance (radians) from each x in X to the great-circle arc from p to g
-    X: [K, D], p: [D], g: [D] (all L2-normalized)
-    """
 
-    p = F.normalize(p, dim=0)
-    g = F.normalize(g, dim=0)
-    # guard near-identity
-    cos_pg = torch.clamp(torch.dot(p, g), -1.0 + eps, 1.0 - eps)
-    theta = torch.arccos(cos_pg)  # length of arc p->g
-
-    # if p ~ g, arc degenerates to point
-    if theta < 1e-6:
-        dot_xy = torch.clamp((X @ p), -1.0 + eps, 1.0 - eps)
-        return torch.arccos(dot_xy)
-
-    # build orthonormal 2-frame {p, u} spanning the arc plane
-    u = g - cos_pg * p
-    u = u / torch.linalg.norm(u).clamp_min(eps)
-
-    # signed angle of each x from p along the arc plane
-    alpha = X @ p                    # cos component
-    beta  = X @ u                    # sin component toward g
-    phi   = torch.atan2(beta, alpha) # angle from p in plane
-
-    # clamp to arc endpoints
-    t = torch.clamp(phi, 0.0, theta)
-
-    # nearest point y on arc (unit)
-    y = torch.cos(t).unsqueeze(1) * p.unsqueeze(0) + torch.sin(t).unsqueeze(1) * u.unsqueeze(0)
-
-    # intrinsic angular distance d_S(x,y) = arccos(x·y)
-    dot_xy = torch.clamp((X * y).sum(dim=1), -1.0 + eps, 1.0 - eps)
-    return torch.arccos(dot_xy)      # [K]
-
-def latent_beam_search_policy(board, beam_width=3, depth=3, lambda_geo=0.2):
+def latent_beam_search_policy(board, beam_width=3, depth=3):
     """
     Beam-style latent search using the advantage axis.
     From the current position, expand top-k moves at each level,
@@ -116,23 +100,17 @@ def latent_beam_search_policy(board, beam_width=3, depth=3, lambda_geo=0.2):
     direction = v_advantage  # white-advantage axis
     player_root = board.turn == chess.WHITE
 
-    def side_goal(is_white_turn):
-        return v_white if is_white_turn else v_black
-
     def score_position(b):
         if b.is_checkmate():
             return float('inf') if b.turn == chess.BLACK else -float('inf')
         elif b.is_stalemate():
             return 0.0
         else:
-            return torch.dot(embed_fen(b.fen()), direction).item()
+            return torch.dot(embed_fens([b.fen()])[0], direction).item()
 
     def search(b, d, player):
         if d == 0 or b.is_game_over():
             return score_position(b), []
-
-        p = embed_fens([b.fen()])[0]
-        g = side_goal(player)
 
         legal_moves = list(b.legal_moves)
         boards = []
@@ -144,17 +122,18 @@ def latent_beam_search_policy(board, beam_width=3, depth=3, lambda_geo=0.2):
         if not boards:
             return score_position(b), []
 
+
         # score all boards from current player's perspective
         fens = [b.fen() for b, _ in boards]
         embeddings = embed_fens(fens)
         scores = torch.matmul(embeddings, direction)
 
-        geo = spherical_arc_distance_batch(embeddings, p, g)
-        scores_now = scores - (lambda_geo * geo)
+        #visualize_beam_candidates(z_next_list=embeddings, reducer=reducer, bg_2d=bg_2d, save_path="beam_candidates.pdf")
+        #print('woot woot')
 
         # select top-k moves for the current player
         k = min(beam_width, len(boards))
-        sorted_indices = torch.argsort(scores_now, descending=player)[:k]
+        sorted_indices = torch.argsort(scores, descending=player)[:k]
 
         best_score = None
         best_path = []
@@ -193,6 +172,7 @@ def play_game(engine, solis_color="white", STOCKFISH_ELO=2000):
             move = result.move
         board.push(move)
         node = node.add_variation(move)
+      
 
     result = board.result()
     game.headers["Result"] = board.result()
@@ -209,7 +189,7 @@ def play_game(engine, solis_color="white", STOCKFISH_ELO=2000):
 
 # === MAIN BENCHMARK LOOP ===
 with chess.engine.SimpleEngine.popen_uci(STOCKFISH_PATH) as engine:
-    for STOCKFISH_ELO in reversed(STOCKFISH_ELOS):
+    for STOCKFISH_ELO in STOCKFISH_ELOS:
         engine.configure({"UCI_LimitStrength": True, "UCI_Elo": STOCKFISH_ELO})
 
         results = []

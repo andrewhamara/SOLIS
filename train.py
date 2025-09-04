@@ -78,8 +78,8 @@ while steps < MAX_STEPS:
         progress_bar.set_postfix(loss=loss.item())
 
         if steps % 20000 == 0:
-            torch.save(model.module.state_dict(), f'/data/hamaraa/solis_latest.pth')
+            torch.save(model.module.state_dict(), f'/data/hamaraa/solis_latest_small.pth')
             total_loss = 0
 
 print('training complete!')
-torch.save(model.module.state_dict(), '/data/hamaraa/solis_final.pth')
+torch.save(model.module.state_dict(), '/data/hamaraa/solis_final_small.pth')

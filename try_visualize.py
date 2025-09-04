@@ -66,17 +66,22 @@ scatter = plt.scatter(
     embeddings_2d[:, 1],
     c=ps_subset,
     cmap="coolwarm",  # blue = black win, red = white win
-    s=8,
-    alpha=0.8
+    s=2,
+    alpha=0.6,
+    linewidth=0,
+    rasterized=True
 )
 plt.annotate("",
     xy=v_white_2d, xytext=v_black_2d,
     arrowprops=dict(arrowstyle="->", color="black", lw=2, linestyle="--"),
 )
-cbar = plt.colorbar(scatter)
+
+cbar = plt.colorbar(scatter, shrink=0.8, pad=0.01)
 cbar.set_label("Win Probability (for white)")
+
+plt.axis("off")
 plt.tight_layout()
-plt.savefig("solis_umap_winprob.pdf")
+plt.savefig("solis_umap_colored.pdf")
 plt.close()
 
 # === optional: overlay game trajectory ===
@@ -94,7 +99,7 @@ def plot_game_on_umap(base_points, traj_points_2d, save_path):
     ax.scatter(base_points[:, 0], base_points[:, 1], s=1, alpha=0.05, color="gray")
 
     # nodes
-    ax.scatter(traj_points_2d[1:-1, 0], traj_points_2d[1:-1, 1], color="black", s=12)
+    ax.scatter(traj_points_2d[1:-1, 0], traj_points_2d[1:-1, 1], color="black", s=10)
     #ax.scatter(traj_points_2d[0, 0], traj_points_2d[0, 1], color="green", s=60, label="start")
     #ax.scatter(traj_points_2d[-1, 0], traj_points_2d[-1, 1], color="black", s=60, label="end")
 
@@ -104,7 +109,7 @@ def plot_game_on_umap(base_points, traj_points_2d, save_path):
         x2, y2 = traj_points_2d[i + 1]
         ax.annotate("",
             xy=(x2, y2), xytext=(x1, y1),
-            arrowprops=dict(arrowstyle="->", color="red", lw=1.5, alpha=0.8),
+            arrowprops=dict(arrowstyle="->", color="black", lw=1.5, alpha=0.8),
         )
 
     #ax.set_title("Latent Interpolation of Game Trajectory")

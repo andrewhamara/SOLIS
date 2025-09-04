@@ -4,7 +4,7 @@ import torch.nn.functional as F
 
 
 class SOLIS(nn.Module):
-    def __init__(self, embed_dim=2048, num_heads=16, ff_dim=2048, num_layers=6):
+    def __init__(self, embed_dim=512, num_heads=16, ff_dim=512, num_layers=6):
         super().__init__()
 
         self.embed_dim = embed_dim
@@ -18,7 +18,7 @@ class SOLIS(nn.Module):
             d_model=embed_dim,
             nhead=num_heads,
             dim_feedforward=ff_dim,
-            dropout=0.0,
+            dropout=0.1,
             activation='gelu',
             batch_first=True
         )
@@ -32,9 +32,11 @@ class SOLIS(nn.Module):
 
         x = self.embedding(x)
 
+        # prepend special [CLS] token
         cls_tokens = self.cls_token.repeat(batch_size, 1, 1)
         x = torch.cat([cls_tokens, x], dim=1)
 
+        # add positional encoding (learned)
         e = self.positional_encoding[:, : x.shape[1], :]
         x = x + e 
 
