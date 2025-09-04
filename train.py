@@ -1,85 +1,61 @@
-import torch
-import torch.optim as optim
-from tqdm import tqdm
-import torch.optim.lr_scheduler as lr_scheduler
-
-from dataloader import get_dataloader
-from infoNCE import SupConLoss
+from lightning.pytorch import Trainer
+from lightning.pytorch.strategies import DDPStrategy
+from lightning.pytorch.callbacks import ModelCheckpoint
 from solis import SOLIS
+from dataloader import get_dataloader
+from lightning.pytorch.loggers import CSVLogger
 
-gpus = [0,1,2,3]
-
-print('setting up model...')
-model = SOLIS().cuda()
-model = torch.nn.DataParallel(model, device_ids=gpus)
-
-# print parameter count
-print(sum(p.numel() for p in model.parameters()))
-
-print('setting up training items...')
-loss_fn = SupConLoss().cuda()
-#optimizer = optim.Adam(model.parameters(), lr=1e-5)
-optimizer = optim.SGD(model.parameters(), lr=.05, momentum=.9)
-
-print('loading data...')
-batch_size = 256
+# === Hyperparameters ===
+BATCH_SIZE = 128
 NUM_POSITIVES = 5
-train_dataloader = get_dataloader(batch_size=batch_size, split='train', k_pos=NUM_POSITIVES)
+MAX_STEPS = 500_000
+GPUS = 4
 
-MAX_STEPS = 1_000_000
-P_THRESHOLD = 0.05
+# === Dataloader ===
+train_dataloader = get_dataloader(
+    batch_size=BATCH_SIZE,
+    split='train',
+    k_pos=NUM_POSITIVES
+)
 
-best_loss = float('inf')
-steps = 0
+# === Model ===
+solis_small = SOLIS(
+    embed_dim=512,
+    num_heads=16,
+    ff_dim=512,
+    num_layers=6,
+    lr=0.05,
+    momentum=0.9,
+    num_positives=NUM_POSITIVES,
+    p_threshold=0.05
+)
 
-while steps < MAX_STEPS:
-    model.train()
-    total_loss = 0
+# === Checkpointing (every 20k steps) ===
+checkpoint_callback = ModelCheckpoint(
+    dirpath="/data/hamaraa/",
+    filename="solis_small_step{step}",
+    every_n_train_steps=20_000,
+    save_top_k=-1,  # save all checkpoints
+    save_weights_only=True
+)
 
-    progress_bar = tqdm(train_dataloader, desc=f'Step {steps+1}/{MAX_STEPS}', dynamic_ncols=True)
-    for batch in progress_bar:
+csv_logger = CSVLogger("logs", name="solis")
 
-        anchor_token = batch["anchor"]
-        positive_tokens = batch["positives"]
-        ps = batch["label"]
+# === Trainer ===
+trainer = Trainer(
+    accelerator="gpu",
+    devices=GPUS,
+    strategy=DDPStrategy(find_unused_parameters=False),
+    max_steps=MAX_STEPS,
+    log_every_n_steps=10,
+    logger=csv_logger,
+    callbacks=[checkpoint_callback]
+)
 
-        anchor_token = anchor_token.cuda()
-        positive_tokens = positive_tokens.cuda()
-        ps = ps.cuda()
+# === Train ===
+trainer.fit(solis_small, train_dataloaders=train_dataloader)
 
-        # extract batch size
-        b = ps.shape[0]
-
-        # anchor embeddings
-        ae = model(anchor_token)
-
-        # positive embeddings
-        pe = model(positive_tokens.view(-1, 77))
-        pe = pe.view(b, NUM_POSITIVES, -1)
-
-        # combine
-        embeddings = torch.cat([ae.unsqueeze(1), pe], dim=1)
-
-        with torch.no_grad():
-            ps = ps.view(-1, 1)
-            p_diffs = torch.abs(ps - ps.T)
-            mask = (p_diffs < P_THRESHOLD).float()
-
-        # loss
-        loss = loss_fn(embeddings, labels=None, mask=mask)
-        total_loss += loss.item()
-
-        # update
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-        steps += 1
-
-        progress_bar.set_postfix(loss=loss.item())
-
-        if steps % 20000 == 0:
-            torch.save(model.module.state_dict(), f'/data/hamaraa/solis_latest_small.pth')
-            total_loss = 0
-
-print('training complete!')
-torch.save(model.module.state_dict(), '/data/hamaraa/solis_final_small.pth')
+# === Final Save ===
+model_path = "/data/hamaraa/solis_final_small.ckpt"
+trainer.save_checkpoint(model_path)
+print(f"Model saved to {model_path}")
