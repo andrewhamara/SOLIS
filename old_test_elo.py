@@ -1,3 +1,4 @@
+from functools import lru_cache
 import chess
 import chess.engine
 import chess.pgn
@@ -84,8 +85,12 @@ def embed_fen(fen):
     with torch.no_grad():
         return model(tokens).squeeze(0)
 
+@lru_cache(maxsize=200_000)
+def token_for_fen(fen):
+    return np.asarray(tokenize(fen), dtype=np.int64)
+
 def embed_fens(fens):
-    tokens = np.array([tokenize(fen) for fen in fens])
+    tokens = np.array([token_for_fen(fen) for fen in fens])
     batch = torch.tensor(tokens, dtype=torch.long, device=DEVICE)
     with torch.no_grad():
         return model(batch)  # shape [N, D]
@@ -122,14 +127,10 @@ def latent_beam_search_policy(board, beam_width=3, depth=3):
         if not boards:
             return score_position(b), []
 
-
         # score all boards from current player's perspective
         fens = [b.fen() for b, _ in boards]
         embeddings = embed_fens(fens)
         scores = torch.matmul(embeddings, direction)
-
-        #visualize_beam_candidates(z_next_list=embeddings, reducer=reducer, bg_2d=bg_2d, save_path="beam_candidates.pdf")
-        #print('woot woot')
 
         # select top-k moves for the current player
         k = min(beam_width, len(boards))
@@ -172,7 +173,6 @@ def play_game(engine, solis_color="white", STOCKFISH_ELO=2000):
             move = result.move
         board.push(move)
         node = node.add_variation(move)
-      
 
     result = board.result()
     game.headers["Result"] = board.result()
