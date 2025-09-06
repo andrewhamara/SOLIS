@@ -1,3 +1,4 @@
+from functools import lru_cache
 import chess
 import chess.engine
 import chess.pgn
@@ -14,7 +15,7 @@ import matplotlib.pyplot as plt
 
 # === CONFIG ===
 STOCKFISH_PATH = "/data/hamaraa/Stockfish/src/stockfish"
-GAMES = 100
+GAMES = 200
 STOCKFISH_ELOS = [2800]
 TIME_LIMIT = 0.05  # stockfish seconds per board
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -25,9 +26,10 @@ model = SOLIS(embed_dim=1024, ff_dim=1024).to(DEVICE)
 #model = SOLIS().to(DEVICE)
 small = False
 
-DEPTH = 2
+DEPTH = 6
 WIDTH = 3
 
+benchmarking_depth = True
 if DEPTH == 2:
     STOCKFISH_ELOS = [2100, 2050, 2000, 1950, 1900, 1850, 1800]
 #if DEPTH == 3:
@@ -37,9 +39,10 @@ if DEPTH == 5:
 if DEPTH == 6 and not small:
     STOCKFISH_ELOS = [2300, 2400, 2450]
 
-print(STOCKFISH_ELOS)
+#print(STOCKFISH_ELOS)
 
-PGN_SAVE_PATH = f'/data/hamaraa/solis_base_d{DEPTH}_w{WIDTH}_allratings_vs_stockfish.pgn'
+
+PGN_SAVE_PATH = f'/data/hamaraa/solis_base_d{DEPTH}_w{WIDTH}_allratings_vs_stockfish_d_{DEPTH}.pgn'
 
 if small:
     model = SOLIS().to(DEVICE)
@@ -50,7 +53,6 @@ else:
     model.load_state_dict(torch.load("/data/hamaraa/solis_good.pth", map_location=DEVICE))
     v_white = np.load("/data/hamaraa/mean_white_checkmate.npy")
     v_black = np.load("/data/hamaraa/mean_black_checkmate.npy")
-
 
 model.eval()
 
@@ -65,49 +67,17 @@ def embed_fen(fen):
     with torch.no_grad():
         return model(tokens).squeeze(0)
 
+@lru_cache(maxsize=200_000)
+def token_for_fen(fen):
+    return np.asarray(tokenize(fen), dtype=np.int64)
+
 def embed_fens(fens):
-    tokens = np.array([tokenize(fen) for fen in fens])
+    tokens = np.array([token_for_fen(fen) for fen in fens])
     batch = torch.tensor(tokens, dtype=torch.long, device=DEVICE)
     with torch.no_grad():
         return model(batch)  # shape [N, D]
 
-def spherical_arc_distance_batch(X, p, g, eps=1e-8):
-    """
-    minimal angular distance (radians) from each x in X to the great-circle arc from p to g
-    X: [K, D], p: [D], g: [D] (all L2-normalized)
-    """
-
-    p = F.normalize(p, dim=0)
-    g = F.normalize(g, dim=0)
-    # guard near-identity
-    cos_pg = torch.clamp(torch.dot(p, g), -1.0 + eps, 1.0 - eps)
-    theta = torch.arccos(cos_pg)  # length of arc p->g
-
-    # if p ~ g, arc degenerates to point
-    if theta < 1e-6:
-        dot_xy = torch.clamp((X @ p), -1.0 + eps, 1.0 - eps)
-        return torch.arccos(dot_xy)
-
-    # build orthonormal 2-frame {p, u} spanning the arc plane
-    u = g - cos_pg * p
-    u = u / torch.linalg.norm(u).clamp_min(eps)
-
-    # signed angle of each x from p along the arc plane
-    alpha = X @ p                    # cos component
-    beta  = X @ u                    # sin component toward g
-    phi   = torch.atan2(beta, alpha) # angle from p in plane
-
-    # clamp to arc endpoints
-    t = torch.clamp(phi, 0.0, theta)
-
-    # nearest point y on arc (unit)
-    y = torch.cos(t).unsqueeze(1) * p.unsqueeze(0) + torch.sin(t).unsqueeze(1) * u.unsqueeze(0)
-
-    # intrinsic angular distance d_S(x,y) = arccos(x·y)
-    dot_xy = torch.clamp((X * y).sum(dim=1), -1.0 + eps, 1.0 - eps)
-    return torch.arccos(dot_xy)      # [K]
-
-def latent_beam_search_policy(board, beam_width=3, depth=3, lambda_geo=0.2):
+def latent_beam_search_policy(board, beam_width=3, depth=3):
     """
     Beam-style latent search using the advantage axis.
     From the current position, expand top-k moves at each level,
@@ -116,23 +86,17 @@ def latent_beam_search_policy(board, beam_width=3, depth=3, lambda_geo=0.2):
     direction = v_advantage  # white-advantage axis
     player_root = board.turn == chess.WHITE
 
-    def side_goal(is_white_turn):
-        return v_white if is_white_turn else v_black
-
     def score_position(b):
         if b.is_checkmate():
             return float('inf') if b.turn == chess.BLACK else -float('inf')
         elif b.is_stalemate():
             return 0.0
         else:
-            return torch.dot(embed_fen(b.fen()), direction).item()
+            return torch.dot(embed_fens([b.fen()])[0], direction).item()
 
     def search(b, d, player):
         if d == 0 or b.is_game_over():
             return score_position(b), []
-
-        p = embed_fens([b.fen()])[0]
-        g = side_goal(player)
 
         legal_moves = list(b.legal_moves)
         boards = []
@@ -149,12 +113,9 @@ def latent_beam_search_policy(board, beam_width=3, depth=3, lambda_geo=0.2):
         embeddings = embed_fens(fens)
         scores = torch.matmul(embeddings, direction)
 
-        geo = spherical_arc_distance_batch(embeddings, p, g)
-        scores_now = scores - (lambda_geo * geo)
-
         # select top-k moves for the current player
         k = min(beam_width, len(boards))
-        sorted_indices = torch.argsort(scores_now, descending=player)[:k]
+        sorted_indices = torch.argsort(scores, descending=player)[:k]
 
         best_score = None
         best_path = []
@@ -189,7 +150,8 @@ def play_game(engine, solis_color="white", STOCKFISH_ELO=2000):
         if (board.turn == chess.WHITE and solis_color == "white") or (board.turn == chess.BLACK and solis_color == "black"):
             move = latent_beam_search_policy(board, beam_width=WIDTH, depth=DEPTH)
         else:
-            result = engine.play(board, chess.engine.Limit(time=TIME_LIMIT))
+            #result = engine.play(board, chess.engine.Limit(time=TIME_LIMIT))
+            result = engine.play(board, chess.engine.Limit(depth=DEPTH, time=TIME_LIMIT))
             move = result.move
         board.push(move)
         node = node.add_variation(move)
@@ -208,14 +170,24 @@ def play_game(engine, solis_color="white", STOCKFISH_ELO=2000):
         return 0.5  # draw
 
 # === MAIN BENCHMARK LOOP ===
-with chess.engine.SimpleEngine.popen_uci(STOCKFISH_PATH) as engine:
-    for STOCKFISH_ELO in reversed(STOCKFISH_ELOS):
-        engine.configure({"UCI_LimitStrength": True, "UCI_Elo": STOCKFISH_ELO})
-
+if not benchmarking_depth:
+    with chess.engine.SimpleEngine.popen_uci(STOCKFISH_PATH) as engine:
+        for STOCKFISH_ELO in STOCKFISH_ELOS:
+            engine.configure({"UCI_LimitStrength": True, "UCI_Elo": STOCKFISH_ELO})
+    
+            results = []
+            for i in tqdm(range(GAMES)):
+                solis_color = "white" if i % 2 == 0 else "black"
+                result = play_game(engine, solis_color, STOCKFISH_ELO)
+                results.append(result)
+                wins, draws, losses = results.count(1), results.count(0.5), results.count(0)
+                print(f'wins: {wins}, draws: {draws}, losses: {losses}')
+else:
+    with chess.engine.SimpleEngine.popen_uci(STOCKFISH_PATH) as engine:
         results = []
         for i in tqdm(range(GAMES)):
             solis_color = "white" if i % 2 == 0 else "black"
-            result = play_game(engine, solis_color, STOCKFISH_ELO)
+            result = play_game(engine, solis_color, DEPTH)
             results.append(result)
             wins, draws, losses = results.count(1), results.count(0.5), results.count(0)
             print(f'wins: {wins}, draws: {draws}, losses: {losses}')
@@ -224,6 +196,6 @@ with chess.engine.SimpleEngine.popen_uci(STOCKFISH_PATH) as engine:
 solis_score = sum(results)
 win_rate = solis_score / GAMES
 
-print(f"\nSOLIS vs Stockfish {STOCKFISH_ELO}")
+#print(f"\nSOLIS vs Stockfish {STOCKFISH_ELO}")
 print(f"Wins: {results.count(1)}  Draws: {results.count(0.5)}  Losses: {results.count(0)}")
 print(f"Win rate: {win_rate:.3f}")
