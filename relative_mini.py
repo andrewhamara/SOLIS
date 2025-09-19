@@ -14,6 +14,11 @@ import matplotlib.pyplot as plt
 from chess.polyglot import zobrist_hash
 from collections import OrderedDict
 
+DEPTH = int(sys.argv[1])
+WIDTH = int(sys.argv[2])
+GPU = int(sys.argv[3])
+os.environ["CUDA_VISIBLE_DEVICES"] = str(GPU)
+
 torch.set_grad_enabled(False)
 
 class LRU:
@@ -48,9 +53,6 @@ print("Device:", DEVICE)
 model = SOLIS(embed_dim=128, ff_dim=256, num_layers=6, num_heads=8).to(DEVICE)
 #model = SOLIS().to(DEVICE)
 mini = False
-
-DEPTH = 5
-WIDTH = 5
 
 def get_embeddings(x, batch_size=256):
     all_embeddings = []
