@@ -14,6 +14,13 @@ import matplotlib.pyplot as plt
 from chess.polyglot import zobrist_hash
 from collections import OrderedDict
 
+import sys, os
+
+DEPTH = int(sys.argv[1])     # e.g. 2
+WIDTH = int(sys.argv[2])     # e.g. 3
+GPU   = int(sys.argv[3])     # e.g. 0
+os.environ["CUDA_VISIBLE_DEVICES"] = str(GPU)
+
 torch.set_grad_enabled(False)
 
 class LRU:
@@ -48,9 +55,6 @@ print("Device:", DEVICE)
 model = SOLIS(embed_dim=128, ff_dim=256, num_heads=8, num_layers=6).to(DEVICE)
 #model = SOLIS().to(DEVICE)
 mini = True
-
-DEPTHS = [2,3,4,5]
-WIDTH = 3
 
 def get_embeddings(x, batch_size=256):
     all_embeddings = []
@@ -95,11 +99,9 @@ def embed_fens(fens):
 
 @torch.no_grad()
 def score_positions(boards):
-    """return list[float] of ⟨embedding, v_advantage⟩, with Zobrist+LRU cache"""
-    # collect zobrist keys
+    """return list[float] of (z - μ_black) · (μ_white - μ_black), with Zobrist+LRU cache"""
     keys = [zobrist_hash(b) for b in boards]
 
-    # split hits/misses
     hit_vals = {}
     miss_idx = []
     for i, k in enumerate(keys):
@@ -109,29 +111,23 @@ def score_positions(boards):
         else:
             miss_idx.append(i)
 
-    # fast path: all cached
     if not miss_idx:
         return [hit_vals[i] for i in range(len(boards))]
 
-    # batch tokenize misses
     fens = [boards[i].fen() for i in miss_idx]
-    toks = np.stack([token_for_fen(f) for f in fens], axis=0)  # uses your @lru_cache
+    toks = np.stack([token_for_fen(f) for f in fens], axis=0)
     batch = torch.tensor(toks, dtype=torch.long, device=DEVICE)
 
-    # forward + score (AMP on cuda)
     model.eval()
     with torch.cuda.amp.autocast(enabled=(DEVICE.type == "cuda")):
-        emb = model(batch)                           # [M, D], already L2-normalized
-        scores = torch.matmul(emb, v_advantage)      # [M]
+        emb = model(batch)   # [M, D]
+        offset = emb - v_black
+        scores = torch.matmul(offset, v_white - v_black)  # projection onto advantage axis
 
-    # write cache (store floats; optional: also cache emb.cpu())
     out_scores = scores.detach().float().cpu().numpy()
     for j, idx in enumerate(miss_idx):
-        k = keys[idx]
-        val = float(out_scores[j])
-        SCORE_CACHE.put(k, val)
+        SCORE_CACHE.put(keys[idx], float(out_scores[j]))
 
-    # merge back in order
     out = []
     mj = 0
     for i in range(len(boards)):
@@ -140,7 +136,6 @@ def score_positions(boards):
         else:
             out.append(float(out_scores[mj])); mj += 1
     return out
-
 
 def latent_beam_search_policy(board, beam_width=3, depth=3):
     TT.clear()  # per-move table; keep SCORE_CACHE global
@@ -255,14 +250,13 @@ def play_game(engine, solis_color, PGN_SAVE_PATH, DEPTH):
     else:
         return 0.5  # draw
 
-for DEPTH in DEPTHS:
-    PGN_SAVE_PATH = f'/data/hamaraa/solis_mini_d{DEPTH}_w{WIDTH}_vs_stockfish_d{DEPTH}.pgn'
-    # === MAIN BENCHMARK LOOP ===
-    with chess.engine.SimpleEngine.popen_uci(STOCKFISH_PATH) as engine:
-        results = []
-        for i in tqdm(range(GAMES)):
-            solis_color = "white" if i % 2 == 0 else "black"
-            result = play_game(engine, solis_color, PGN_SAVE_PATH=PGN_SAVE_PATH, DEPTH=DEPTH)
-            results.append(result)
-            wins, draws, losses = results.count(1), results.count(0.5), results.count(0)
-            print(f'wins: {wins}, draws: {draws}, losses: {losses}')
+PGN_SAVE_PATH = f'/data/hamaraa/solis_mini_relative_d{DEPTH}_w{WIDTH}_vs_stockfish_d{DEPTH}.pgn'
+# === MAIN BENCHMARK LOOP ===
+with chess.engine.SimpleEngine.popen_uci(STOCKFISH_PATH) as engine:
+    results = []
+    for i in tqdm(range(GAMES)):
+        solis_color = "white" if i % 2 == 0 else "black"
+        result = play_game(engine, solis_color, PGN_SAVE_PATH=PGN_SAVE_PATH, DEPTH=DEPTH)
+        results.append(result)
+        wins, draws, losses = results.count(1), results.count(0.5), results.count(0)
+        print(f'wins: {wins}, draws: {draws}, losses: {losses}')
