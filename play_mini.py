@@ -216,7 +216,7 @@ def latent_beam_search_policy(board, beam_width=3, depth=3):
     return best_mv
 
 # === PLAY A SINGLE GAME ===
-def play_game(engine, solis_color, PGN_SAVE_PATH, DEPTH):
+def play_game(engine, solis_color, PGN_SAVE_PATH, DEPTH, LOG_PATH=None):
     board = chess.Board()
     game = chess.pgn.Game()
     game.headers['Event'] = "SOLIS vs Stockfish"
@@ -227,28 +227,51 @@ def play_game(engine, solis_color, PGN_SAVE_PATH, DEPTH):
     game.headers["Black"] = black_name
 
     node = game
+    total_nodes = 0
+
+    # open log file if provided
+    log_file = open(LOG_PATH, "a") if LOG_PATH else None
+
+    def log(msg):
+        print(msg)
+        if log_file:
+            log_file.write(msg + "\n")
+            log_file.flush()
 
     while not board.is_game_over():
-        if (board.turn == chess.WHITE and solis_color == "white") or (board.turn == chess.BLACK and solis_color == "black"):
+        if (board.turn == chess.WHITE and solis_color == "white") or \
+           (board.turn == chess.BLACK and solis_color == "black"):
             move = latent_beam_search_policy(board, beam_width=WIDTH, depth=DEPTH)
         else:
-            result = engine.play(board, chess.engine.Limit(depth=DEPTH, time=TIME_LIMIT))
+            result = engine.play(
+                board,
+                chess.engine.Limit(depth=DEPTH, time=TIME_LIMIT),
+                info=chess.engine.INFO_ALL
+            )
             move = result.move
+            nodes = result.info.get("nodes", 0)
+            total_nodes += nodes
+            log(f"Move {board.fullmove_number}, nodes searched: {nodes}, cumulative: {total_nodes}")
+
         board.push(move)
         node = node.add_variation(move)
 
     result = board.result()
-    game.headers["Result"] = board.result()
+    game.headers["Result"] = result
 
     with open(PGN_SAVE_PATH, "a") as pgn_file:
         print(game, file=pgn_file, flush=True)
 
+    if log_file:
+        log_file.close()
+
     if result == "1-0":
-        return 1 if solis_color == "white" else 0
+        outcome = 1 if solis_color == "white" else 0
     elif result == "0-1":
-        return 1 if solis_color == "black" else 0
+        outcome = 1 if solis_color == "black" else 0
     else:
-        return 0.5  # draw
+        outcome = 0.5
+    return outcome, total_nodes
 
 PGN_SAVE_PATH = f'/data/hamaraa/solis_mini_relative_d{DEPTH}_w{WIDTH}_vs_stockfish_d{DEPTH}.pgn'
 # === MAIN BENCHMARK LOOP ===
@@ -256,7 +279,7 @@ with chess.engine.SimpleEngine.popen_uci(STOCKFISH_PATH) as engine:
     results = []
     for i in tqdm(range(GAMES)):
         solis_color = "white" if i % 2 == 0 else "black"
-        result = play_game(engine, solis_color, PGN_SAVE_PATH=PGN_SAVE_PATH, DEPTH=DEPTH)
+        result, nodes = play_game(engine, solis_color, PGN_SAVE_PATH=PGN_SAVE_PATH, DEPTH=DEPTH, LOG_PATH="nodes.log")
         results.append(result)
         wins, draws, losses = results.count(1), results.count(0.5), results.count(0)
         print(f'wins: {wins}, draws: {draws}, losses: {losses}')
