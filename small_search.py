@@ -14,13 +14,6 @@ import matplotlib.pyplot as plt
 from chess.polyglot import zobrist_hash
 from collections import OrderedDict
 
-import sys, os
-
-DEPTH = int(sys.argv[1])     # e.g. 2
-WIDTH = int(sys.argv[2])     # e.g. 3
-GPU   = int(sys.argv[3])     # e.g. 0
-os.environ["CUDA_VISIBLE_DEVICES"] = str(GPU)
-
 torch.set_grad_enabled(False)
 
 class LRU:
@@ -52,9 +45,12 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Device:", DEVICE)
 
 # === LOAD SOLIS MODEL + ADVANTAGE AXIS ===
-model = SOLIS(embed_dim=128, ff_dim=256, num_heads=8, num_layers=6).to(DEVICE)
+model = SOLIS(embed_dim=512, ff_dim=512, num_layers=6, num_heads=16).to(DEVICE)
 #model = SOLIS().to(DEVICE)
-mini = True
+small = True
+
+DEPTH = 3
+WIDTH = 3
 
 def get_embeddings(x, batch_size=256):
     all_embeddings = []
@@ -65,10 +61,40 @@ def get_embeddings(x, batch_size=256):
             all_embeddings.append(emb)
     return np.concatenate(all_embeddings, axis=0)
 
-if mini:
-    model.load_state_dict(torch.load("/data/hamaraa/solis_mini_stepstep=400000.ckpt", map_location=DEVICE)["state_dict"])
-    v_white = np.load("/data/hamaraa/mean_white_checkmate_mini.npy")
-    v_black = np.load("/data/hamaraa/mean_black_checkmate_mini.npy")
+
+if DEPTH == 2:
+    STOCKFISH_ELOS = [2100, 2050, 2000, 1950, 1900, 1850, 1800]
+if DEPTH == 2 and WIDTH < 3:
+    STOCKFISH_ELOS = [1350, 1400, 1450, 1500, 1550, 1600, 1650]
+
+if DEPTH == 3:
+    STOCKFISH_ELOS = [2000, 2050, 2100, 2150, 2200, 2250, 2300]
+if DEPTH == 3 and WIDTH < 3:
+    STOCKFISH_ELOS = [1500, 1550, 1600, 1650, 1700, 1750, 1800]
+
+if DEPTH == 4:
+    STOCKFISH_ELOS = [2400, 2350, 2300, 2250, 2200, 2150]
+if DEPTH == 4 and WIDTH < 3:
+    STOCKFISH_ELOS = [1600, 1650, 1700, 1750, 1800, 1850]
+
+if DEPTH == 5:
+    STOCKFISH_ELOS = [2500, 2400, 2350, 2300, 2250, 2200]
+if DEPTH == 5 and WIDTH < 3:
+    STOCKFISH_ELOS = [1700, 1750, 1800, 1850, 1900, 1950]
+    
+if DEPTH == 6:
+    STOCKFISH_ELOS = [2600, 2550, 2500, 2400, 2300, 2200]
+
+print(STOCKFISH_ELOS)
+
+STEPS = 50000
+PGN_SAVE_PATH = f'/data/hamaraa/solis_small_{STEPS}_steps_d{DEPTH}_w{WIDTH}_allratings_vs_stockfish.pgn'
+
+if small:
+    #model.load_state_dict(torch.load("/data/hamaraa/solis_latest_small.pth", map_location=DEVICE))
+    model.load_state_dict(torch.load(f"/data/hamaraa/solis_small_stepstep={STEPS}.ckpt", map_location=DEVICE)["state_dict"])
+    v_white = np.load("/data/hamaraa/mean_white_checkmate_small.npy")
+    v_black = np.load("/data/hamaraa/mean_black_checkmate_small.npy")
 else:
     model.load_state_dict(torch.load("/data/hamaraa/solis_good.pth", map_location=DEVICE))
     v_white = np.load("/data/hamaraa/mean_white_checkmate.npy")
@@ -99,9 +125,11 @@ def embed_fens(fens):
 
 @torch.no_grad()
 def score_positions(boards):
-    """return list[float] of (z - μ_black) · (μ_white - μ_black), with Zobrist+LRU cache"""
+    """return list[float] of ⟨embedding, v_advantage⟩, with Zobrist+LRU cache"""
+    # collect zobrist keys
     keys = [zobrist_hash(b) for b in boards]
 
+    # split hits/misses
     hit_vals = {}
     miss_idx = []
     for i, k in enumerate(keys):
@@ -111,23 +139,29 @@ def score_positions(boards):
         else:
             miss_idx.append(i)
 
+    # fast path: all cached
     if not miss_idx:
         return [hit_vals[i] for i in range(len(boards))]
 
+    # batch tokenize misses
     fens = [boards[i].fen() for i in miss_idx]
-    toks = np.stack([token_for_fen(f) for f in fens], axis=0)
+    toks = np.stack([token_for_fen(f) for f in fens], axis=0)  # uses your @lru_cache
     batch = torch.tensor(toks, dtype=torch.long, device=DEVICE)
 
+    # forward + score (AMP on cuda)
     model.eval()
     with torch.cuda.amp.autocast(enabled=(DEVICE.type == "cuda")):
-        emb = model(batch)   # [M, D]
-        offset = emb - v_black
-        scores = torch.matmul(offset, v_white - v_black)  # projection onto advantage axis
+        emb = model(batch)                           # [M, D], already L2-normalized
+        scores = torch.matmul(emb, v_advantage)      # [M]
 
+    # write cache (store floats; optional: also cache emb.cpu())
     out_scores = scores.detach().float().cpu().numpy()
     for j, idx in enumerate(miss_idx):
-        SCORE_CACHE.put(keys[idx], float(out_scores[j]))
+        k = keys[idx]
+        val = float(out_scores[j])
+        SCORE_CACHE.put(k, val)
 
+    # merge back in order
     out = []
     mj = 0
     for i in range(len(boards)):
@@ -136,6 +170,7 @@ def score_positions(boards):
         else:
             out.append(float(out_scores[mj])); mj += 1
     return out
+
 
 def latent_beam_search_policy(board, beam_width=3, depth=3):
     TT.clear()  # per-move table; keep SCORE_CACHE global
@@ -216,70 +251,49 @@ def latent_beam_search_policy(board, beam_width=3, depth=3):
     return best_mv
 
 # === PLAY A SINGLE GAME ===
-def play_game(engine, solis_color, PGN_SAVE_PATH, DEPTH, LOG_PATH=None):
+def play_game(engine, solis_color="white", STOCKFISH_ELO=2000):
     board = chess.Board()
     game = chess.pgn.Game()
     game.headers['Event'] = "SOLIS vs Stockfish"
 
-    white_name = "SOLIS" if solis_color == "white" else f"Stockfish_d{DEPTH}"
-    black_name = f"Stockfish_d{DEPTH}" if solis_color == "white" else "SOLIS"
+    white_name = "SOLIS" if solis_color == "white" else f"Stockfish_{STOCKFISH_ELO}"
+    black_name = f"Stockfish_{STOCKFISH_ELO}" if solis_color == "white" else "SOLIS"
     game.headers["White"] = white_name
     game.headers["Black"] = black_name
 
     node = game
-    total_nodes = 0
-
-    # open log file if provided
-    log_file = open(LOG_PATH, "a") if LOG_PATH else None
-
-    def log(msg):
-        print(msg)
-        if log_file:
-            log_file.write(msg + "\n")
-            log_file.flush()
 
     while not board.is_game_over():
-        if (board.turn == chess.WHITE and solis_color == "white") or \
-           (board.turn == chess.BLACK and solis_color == "black"):
+        if (board.turn == chess.WHITE and solis_color == "white") or (board.turn == chess.BLACK and solis_color == "black"):
             move = latent_beam_search_policy(board, beam_width=WIDTH, depth=DEPTH)
         else:
-            result = engine.play(
-                board,
-                chess.engine.Limit(depth=DEPTH, time=TIME_LIMIT),
-                info=chess.engine.INFO_ALL
-            )
+            result = engine.play(board, chess.engine.Limit(time=TIME_LIMIT))
             move = result.move
-            nodes = result.info.get("nodes", 0)
-            total_nodes += nodes
-            log(f"Move {board.fullmove_number}, nodes searched: {nodes}, cumulative: {total_nodes}")
-
         board.push(move)
         node = node.add_variation(move)
 
     result = board.result()
-    game.headers["Result"] = result
+    game.headers["Result"] = board.result()
 
     with open(PGN_SAVE_PATH, "a") as pgn_file:
         print(game, file=pgn_file, flush=True)
 
-    if log_file:
-        log_file.close()
-
     if result == "1-0":
-        outcome = 1 if solis_color == "white" else 0
+        return 1 if solis_color == "white" else 0
     elif result == "0-1":
-        outcome = 1 if solis_color == "black" else 0
+        return 1 if solis_color == "black" else 0
     else:
-        outcome = 0.5
-    return outcome, total_nodes
+        return 0.5  # draw
 
-PGN_SAVE_PATH = f'/data/hamaraa/solis_mini_relative_nodecount_d{DEPTH}_w{WIDTH}_vs_stockfish_d{DEPTH}.pgn'
 # === MAIN BENCHMARK LOOP ===
 with chess.engine.SimpleEngine.popen_uci(STOCKFISH_PATH) as engine:
-    results = []
-    for i in tqdm(range(GAMES)):
-        solis_color = "white" if i % 2 == 0 else "black"
-        result, nodes = play_game(engine, solis_color, PGN_SAVE_PATH=PGN_SAVE_PATH, DEPTH=DEPTH, LOG_PATH="nodes_d5.log")
-        results.append(result)
-        wins, draws, losses = results.count(1), results.count(0.5), results.count(0)
-        print(f'wins: {wins}, draws: {draws}, losses: {losses}')
+    for STOCKFISH_ELO in STOCKFISH_ELOS:
+        engine.configure({"UCI_LimitStrength": True, "UCI_Elo": STOCKFISH_ELO})
+
+        results = []
+        for i in tqdm(range(GAMES)):
+            solis_color = "white" if i % 2 == 0 else "black"
+            result = play_game(engine, solis_color, STOCKFISH_ELO)
+            results.append(result)
+            wins, draws, losses = results.count(1), results.count(0.5), results.count(0)
+            print(f'wins: {wins}, draws: {draws}, losses: {losses}')
