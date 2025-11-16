@@ -84,6 +84,36 @@ class SOLIS(L.LightningModule):
         self.log("train_loss", loss, prog_bar=True, on_step=True, on_epoch=False)
         return loss
 
+    def validation_step(self, batch, batch_idx):
+        anchor_token = batch["anchor"]
+        positive_tokens = batch["positives"]
+        ps = batch["label"]
+
+        b = ps.shape[0]
+
+        ae = self(anchor_token)
+        pe = self(positive_tokens.view(-1, self.seq_len))
+        pe = pe.view(b, self.hparams.num_positives, -1)
+
+        embeddings = torch.cat([ae.unsqueeze(1), pe], dim=1)
+
+        # p-distance mask
+        with torch.no_grad():
+            ps = ps.view(-1, 1)
+            p_diffs = torch.abs(ps - ps.T)
+            mask = (p_diffs < self.hparams.p_threshold).float()
+
+        loss = self.loss_fn(embeddings, labels=None, mask=mask)
+
+        self.log("val_loss",
+                 loss,
+                 prog_bar=True,
+                 on_step=False,
+                 on_epoch=True,
+                 sync_dist=True)
+
+        return loss
+
     def configure_optimizers(self):
         optimizer = torch.optim.SGD(
             self.parameters(),

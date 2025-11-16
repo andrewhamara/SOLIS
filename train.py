@@ -18,6 +18,13 @@ train_dataloader = get_dataloader(
     k_pos=NUM_POSITIVES
 )
 
+val_dataloader = get_dataloader(
+    batch_size=BATCH_SIZE,
+    split='val',
+    k_pos=NUM_POSITIVES
+)
+
+
 # === Model ===
 solis_small = SOLIS(
     embed_dim=512,
@@ -34,8 +41,17 @@ solis_small = SOLIS(
 checkpoint_callback = ModelCheckpoint(
     dirpath="/data/hamaraa/",
     filename="solis_small_step{step}",
-    every_n_train_steps=20_000,
+    every_n_train_steps=10_000,
     save_top_k=-1,  # save all checkpoints
+    save_weights_only=True
+)
+
+best_ckpt = ModelCheckpoint(
+    dirpath="/data/hamaraa/",
+    filename="solis_small_best",
+    monitor="val_loss",
+    mode="min",
+    save_top_k=1,
     save_weights_only=True
 )
 
@@ -49,11 +65,11 @@ trainer = Trainer(
     max_steps=MAX_STEPS,
     log_every_n_steps=10,
     logger=csv_logger,
-    callbacks=[checkpoint_callback]
+    callbacks=[checkpoint_callback, best_ckpt]
 )
 
 # === Train ===
-trainer.fit(solis_small, train_dataloaders=train_dataloader)
+trainer.fit(solis_small, train_dataloaders=train_dataloader, val_dataloaders=val_dataloader)
 
 # === Final Save ===
 model_path = "/data/hamaraa/solis_final_small.ckpt"
