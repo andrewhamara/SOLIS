@@ -13,10 +13,13 @@ import time
 import matplotlib.pyplot as plt
 from chess.polyglot import zobrist_hash
 from collections import OrderedDict
+import sys
+import os
 
 DEPTH = int(sys.argv[1])
 WIDTH = int(sys.argv[2])
 GPU = int(sys.argv[3])
+DELTA = sys.argv[4]
 os.environ["CUDA_VISIBLE_DEVICES"] = str(GPU)
 
 torch.set_grad_enabled(False)
@@ -52,7 +55,7 @@ print("Device:", DEVICE)
 # === LOAD SOLIS MODEL + ADVANTAGE AXIS ===
 model = SOLIS(embed_dim=128, ff_dim=256, num_layers=6, num_heads=8).to(DEVICE)
 #model = SOLIS().to(DEVICE)
-mini = False
+mini = True
 
 def get_embeddings(x, batch_size=256):
     all_embeddings = []
@@ -86,13 +89,14 @@ if DEPTH == 5 and WIDTH < 3:
 
 print(STOCKFISH_ELOS)
 
-PGN_SAVE_PATH = f'/data/hamaraa/solis_base_relative_d{DEPTH}_w{WIDTH}_allratings_vs_stockfish.pgn'
+PGN_SAVE_PATH = f'/data/hamaraa/solis_mini_relative_d{DEPTH}_w{WIDTH}_delta{DELTA}_allratings_vs_stockfish.pgn'
 
 if mini:
     print('yes')
-    model.load_state_dict(torch.load("/data/hamaraa/solis_mini_stepstep=400000.ckpt", map_location=DEVICE)["state_dict"])
-    v_white = np.load("/data/hamaraa/mean_white_checkmate_mini.npy")
-    v_black = np.load("/data/hamaraa/mean_black_checkmate_mini.npy")
+    model_path = f'/data/hamaraa/solis_final_mini_delta_{DELTA}.ckpt'
+    model.load_state_dict(torch.load(model_path, map_location=DEVICE)["state_dict"])
+    v_white = np.load(f"/data/hamaraa/mean_white_checkmate_mini_delta_{DELTA}.npy")
+    v_black = np.load(f"/data/hamaraa/mean_black_checkmate_mini_delta_{DELTA}.npy")
 
 model.eval()
 
