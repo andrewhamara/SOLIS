@@ -1,7 +1,5 @@
 # SOLIS
 
-A grandmaster-level chess engine that plays entirely within a learned contrastive embedding space — no handcrafted evaluation, no traditional tree search.
-
 SOLIS learns a manifold where chess positions are organized by game outcome: one end corresponds to white checkmate, the other to black checkmate, and equal positions lie near the center. Moves are selected by finding actions that push the position toward favorable regions of this space using beam search along a learned "advantage direction."
 
 <p align="center">
