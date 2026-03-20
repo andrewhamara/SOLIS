@@ -1,3 +1,16 @@
+"""
+Data loading for SOLIS contrastive training.
+
+Loads pre-tokenized chess positions from HDF5 files. Each sample consists of:
+  - An anchor position (tokenized FEN)
+  - k_pos positive positions (positions with similar win probabilities)
+  - The anchor's win probability label
+
+Positives are selected by finding positions whose win probability falls within
+p_threshold of the anchor's win probability, using binary search on a sorted
+index for efficiency.
+"""
+
 import h5py
 import numpy as np
 from tokenizer import tokenize

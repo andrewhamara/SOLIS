@@ -1,3 +1,5 @@
+import sys
+import os
 from functools import lru_cache
 import chess
 import chess.engine
@@ -124,7 +126,6 @@ def embed_fens(fens):
     with torch.no_grad():
         return model(batch)  # shape [N, D]
 
-@torch.no_grad()
 @torch.no_grad()
 def score_positions(boards):
     """return list[float] of (z - μ_black) · (μ_white - μ_black), with Zobrist+LRU cache"""

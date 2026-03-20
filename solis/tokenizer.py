@@ -1,4 +1,23 @@
-# tokenizer as implemented in https://github.com/google-deepmind/searchless_chess
+"""
+FEN tokenizer for SOLIS.
+
+Converts FEN (Forsyth-Edwards Notation) chess position strings into fixed-length
+77-dimensional integer vectors suitable for transformer input.
+
+Based on the tokenizer from DeepMind's Searchless Chess:
+https://github.com/google-deepmind/searchless_chess
+
+Token layout (77 tokens total):
+  - [0]:      Side to move (w/b)
+  - [1-64]:   Piece placement (8x8 board, empty squares encoded as '.')
+  - [65-68]:  Castling rights (up to 4 chars, padded with '.')
+  - [69-70]:  En passant square (2 chars, or '..' if none)
+  - [71-73]:  Halfmove clock (zero-padded to 3 digits)
+  - [74-76]:  Fullmove number (zero-padded to 3 digits)
+
+Vocabulary: 34 characters -- digits 0-9, files a-h, piece types (pnrkqPBNRQK),
+            side indicators (w, b), dash (-), and padding dot (.)
+"""
 
 import jaxtyping as jtp
 import numpy as np
@@ -54,6 +73,3 @@ def tokenize(fen: str) -> jtp.Int32[jtp.Array, 'T']:
     assert len(indices) == SEQUENCE_LEN
 
     return np.array(indices, dtype=np.uint8)
-
-# example usage:
-#tokenize('8/8/8/4p1K1/2k1P3/8/8/8 b - - 0 1')
