@@ -5,7 +5,7 @@ SOLIS learns a manifold where chess positions are organized by game outcome: one
 <p align="center">
   <img src="orbit.gif" alt="3D orbit of the SOLIS embedding space" width="500"/>
   <br>
-  <em>3D projection of the learned embedding space. The linear structure from black checkmate (left) to white checkmate (right) emerges naturally from contrastive training.</em>
+  <em>3D projection of the learned embedding space. The structure from black checkmate to white checkmate emerges naturally from contrastive training.</em>
 </p>
 
 ## Papers
@@ -23,17 +23,17 @@ SOLIS uses **supervised contrastive learning** to train a Transformer encoder on
 FEN string → Tokenizer (77 tokens) → Transformer Encoder → L2-normalized embedding (1024-d)
 ```
 
-The result is a manifold with a clean linear structure that encodes game-theoretic value as geometric distance.
+The result is a manifold with that encodes value as distance.
 
 ### Inference
 
-At inference time, SOLIS computes an **advantage direction** — the normalized vector from the mean black-checkmate embedding to the mean white-checkmate embedding. Positions are scored by projecting their embeddings onto this axis:
+At inference time, SOLIS computes an **advantage direction**, the normalized vector from the mean black-checkmate embedding to the mean white-checkmate embedding. Positions are scored by projecting their embeddings onto this axis:
 
 ```
 score(position) = (embedding − μ_black) · (μ_white − μ_black)
 ```
 
-A **latent beam search** explores move sequences by expanding only the top-k most promising moves at each depth level, using the advantage-axis score as the evaluation function.
+A greedy search explores moves by expanding only the top-k most promising moves at each depth level, based on scores given by the advantage axis.
 
 ## Setup
 
